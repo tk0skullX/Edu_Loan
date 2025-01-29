@@ -261,7 +261,7 @@ def main():
     """)
 
     # Section 1: Disbursements
-    st.header("1. Disbursements (Udhar Liya Kab?)")
+    st.header("1. Disbursements (Udhar Liya Kab? yyyy-mm-dd)")
     st.write("Fill in your loan disbursement dates and amounts. Sab aapke haath mein, bhai!")
     default_disb = pd.DataFrame({
         'disbursement_date': pd.Series([], dtype='str'),
