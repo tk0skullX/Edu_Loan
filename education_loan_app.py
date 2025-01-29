@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
-"""education_loan_app.py
 """
+education_loan_app.py
+
+A dynamic education loan calculator in Hinglish with separate disbursements,
+scenario analysis, and a comedic touch.
+"""
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -25,7 +30,7 @@ def get_annual_rate_for_date(date, df_rate_schedule, default_rate):
     df_rate_schedule['effective_date'] = pd.to_datetime(df_rate_schedule['effective_date'])
     df_rate_schedule = df_rate_schedule.sort_values('effective_date')
 
-    # Filter schedule rows where effective_date <= the current date
+    # Filter schedule rows where effective_date <= date
     applicable = df_rate_schedule[df_rate_schedule['effective_date'] <= date]
     if applicable.empty:
         # If the date is before the first effective_date, return default
@@ -35,26 +40,27 @@ def get_annual_rate_for_date(date, df_rate_schedule, default_rate):
         latest_row = applicable.iloc[-1]
         return latest_row['annual_rate']
 
+
 # ---------------------------------------------------------
 # B. Core loan calculation function (Separate Disbursements)
 # ---------------------------------------------------------
 def separate_disbursements_amortization(
-    df_disb,               # DataFrame: [disbursement_date, amount]
-    df_payments,           # DataFrame: [payment_date, amount]
-    df_rate_schedule,      # DataFrame: [effective_date, annual_rate], optional
-    default_annual_rate=0.084,  # fallback if no schedule applies, e.g. 0.084
-    monthly_emi=25000,           # user-chosen EMI
+    df_disb,
+    df_payments,
+    df_rate_schedule,
+    default_annual_rate=0.084,  # fallback if no schedule applies, e.g. 0.084 means 8.4%
+    monthly_emi=25000,
     start_payment_date=datetime(2025,5,1),
-    max_months=216,        # up to 18 years
-    simple_years=3         # 3-year simple interest window for each disb
+    max_months=216,   # up to 18 years
+    simple_years=3    # 3-year simple interest window for each disb
 ):
     """
     Returns:
       - df_schedule: monthly aggregated schedule (DataFrame)
-      - disbursements_list: final state of each disbursement 
+      - disbursements_list: final state of each disbursement
     """
 
-    # Ensure correct dtypes
+    # Convert columns to datetime just in case
     df_disb['disbursement_date'] = pd.to_datetime(df_disb['disbursement_date'])
     df_payments['payment_date']  = pd.to_datetime(df_payments['payment_date'])
 
@@ -69,12 +75,12 @@ def separate_disbursements_amortization(
             'id': i,
             'disbursement_date': row['disbursement_date'],
             'principal_outstanding': row['amount'],
-            'accrued_simple_interest': 0.0  # interest in simple phase that hasn't been capitalized
+            'accrued_simple_interest': 0.0  # interest in simple phase not capitalized yet
         })
 
     # Create a monthly date range from start_payment_date up to max_months
     end_date = start_payment_date + pd.DateOffset(months=max_months)
-    period_dates = pd.date_range(start=start_payment_date, end=end_date, freq='MS')  # Month start
+    period_dates = pd.date_range(start=start_payment_date, end=end_date, freq='MS')  # Month Start
 
     schedule_rows = []
 
@@ -87,16 +93,16 @@ def separate_disbursements_amortization(
         disb_interest_list = []
 
         for disb in disbursements_list:
-            # If fully cleared, skip
+            # If disbursement is fully cleared, skip
             if disb['principal_outstanding'] <= 0 and disb['accrued_simple_interest'] <= 0:
                 disb_interest_list.append(0.0)
                 continue
 
-            # Fetch the correct annual rate for this month from schedule
+            # Fetch correct annual rate
             annual_rate = get_annual_rate_for_date(current_date, df_rate_schedule, default_annual_rate)
             monthly_rate = annual_rate / 12.0
 
-            # Determine if still in simple interest window
+            # Are we still in the simple interest window for this disbursement?
             simple_phase_end = disb['disbursement_date'] + pd.DateOffset(years=simple_years)
             if current_date < simple_phase_end:
                 # Simple interest = principal_outstanding * monthly_rate
@@ -111,7 +117,7 @@ def separate_disbursements_amortization(
         # 3) The user’s total payment for this month
         total_payment = monthly_emi + lumpsum_payment
 
-        # 4a) Pay interest first (allocated proportionally)
+        # 4a) Pay interest first (allocated proportionally across disbursements)
         interest_paid_list = [0.0]*len(disbursements_list)
         principal_paid_list = [0.0]*len(disbursements_list)
 
@@ -122,7 +128,7 @@ def separate_disbursements_amortization(
                     continue
                 ratio = interest_portion / total_interest_this_month
                 allocated_interest = total_payment * ratio
-                # can't pay more than interest_portion
+                # can't exceed the actual interest needed
                 interest_paid_list[i2] = min(allocated_interest, interest_portion)
             interest_paid_sum = sum(interest_paid_list)
             total_payment -= interest_paid_sum
@@ -152,7 +158,7 @@ def separate_disbursements_amortization(
             in_simple = (current_date < simple_phase_end)
 
             if in_simple:
-                # Accumulate any unpaid interest in accrued_simple_interest
+                # Accumulate unpaid interest in accrued_simple_interest
                 disb['accrued_simple_interest'] += unpaid_interest
             else:
                 # In compound phase, unpaid interest is capitalized
@@ -161,12 +167,12 @@ def separate_disbursements_amortization(
             # Subtract principal paid
             disb['principal_outstanding'] -= principal_paid_list[i2]
 
-            # If we've crossed from simple to compound, capitalize any leftover
+            # If we've just crossed from simple to compound, capitalize leftover simple interest
             if not in_simple and disb['accrued_simple_interest'] > 0:
                 disb['principal_outstanding'] += disb['accrued_simple_interest']
                 disb['accrued_simple_interest'] = 0.0
 
-        # Summaries for schedule
+        # Summaries
         total_principal_out = sum(d['principal_outstanding'] for d in disbursements_list if d['principal_outstanding']>0)
         total_accrued_si = sum(d['accrued_simple_interest'] for d in disbursements_list if d['accrued_simple_interest']>0)
 
@@ -190,8 +196,8 @@ def separate_disbursements_amortization(
 
 
 # ---------------------------------------------------------
-# D. Helper to find required EMI for a target payoff months
-#    We'll do a simple "binary search" approach to guess EMI.
+# C. Helper: find_required_emi_for_target_months 
+#    We'll do a simple binary search to approximate EMI
 # ---------------------------------------------------------
 def find_required_emi_for_target_months(
     df_disb,
@@ -224,28 +230,27 @@ def find_required_emi_for_target_months(
             simple_years=simple_years
         )
         if df_sch.empty:
-            # No schedule or cleared instantly? 
-            # Let's treat that as no real solution, push EMI down
+            # No schedule or cleared instantly => push EMI down
             left = mid + 1
             continue
+
         last_period = df_sch['Period'].iloc[-1]
         final_principal = df_sch['Ending_Total_Principal'].iloc[-1]
         final_simple_int = df_sch['Ending_Total_Simple_Interest'].iloc[-1]
 
-        # If it's fully paid and done <= target_months, 
-        # we can try lower EMI to see if there's a smaller feasible
+        # If it's fully paid in <= target_months, can we go lower?
         if final_principal < 1e-8 and final_simple_int < 1e-8 and last_period <= target_months:
             best_emi = mid
             right = mid - 1
         else:
-            # Not fully paid, or took more than target_months => need bigger EMI
+            # Not fully paid or took more than target_months => need bigger EMI
             left = mid + 1
 
     return best_emi
 
 
 # ---------------------------------------------------------
-# E. Streamlit App
+# D. Streamlit App with Hinglish + scenario analysis
 # ---------------------------------------------------------
 def main():
     st.title("Dynamic Education Loan Calculator — Funny Hinglish Edition")
@@ -267,7 +272,9 @@ def main():
         'disbursement_date': pd.Series([], dtype='str'),
         'amount': pd.Series([], dtype='float')
     })
-    df_disb_user = st.data_editor(
+
+    # We'll use experimental_data_editor here:
+    df_disb_user = st.experimental_data_editor(
         default_disb,
         num_rows="dynamic",
         use_container_width=True,
@@ -285,7 +292,7 @@ def main():
         'payment_date': pd.Series([], dtype='str'),
         'amount': pd.Series([], dtype='float')
     })
-    df_pay_user = st.data_editor(
+    df_pay_user = st.experimental_data_editor(
         default_payments,
         num_rows="dynamic",
         use_container_width=True,
@@ -304,7 +311,7 @@ def main():
         'effective_date': pd.Series([], dtype='str'),
         'annual_rate': pd.Series([], dtype='float')  # 8.4 means 8.4%
     })
-    df_rate_user = st.data_editor(
+    df_rate_user = st.experimental_data_editor(
         default_rates,
         num_rows="dynamic",
         use_container_width=True,
@@ -326,24 +333,22 @@ def main():
                                         help="Bhai, 8.4 matlab 8.4%. Mat sochna 0.084.")
     default_rate = user_interest_pct / 100.0  # convert to decimal
 
-    monthly_emi = st.slider("Monthly EMI (Kitna dena chahoge har mahine?)", 
+    monthly_emi = st.slider("Monthly EMI (Kitna dena chahoge har mahine?)",
                             min_value=0, max_value=200000, step=5000, value=25000)
 
     start_date = st.date_input("Repayment Start Date (Kab se dena shuru?)", value=datetime(2025,5,1))
-    max_months = st.number_input("Max Tenure in Months (Ek limit daalo)", 
+    max_months = st.number_input("Max Tenure in Months (Ek limit daalo)",
                                  min_value=12, max_value=480, value=216, step=12)
     simple_years = st.number_input("Simple Interest Period (Years from each Disb Date)",
                                    min_value=1, max_value=10, value=3, step=1)
 
     st.write("---")
     if st.button("Calculate Repayment Schedule"):
-        # Convert empty user data to something workable if empty
+        # Clean up data
         if df_disb_user.empty:
             st.warning("Arre bhai, disbursements hi nahi daale! Ab loan kahan se aaya?")
             return
-        
-        # Clean up data
-        # Remove rows that have no date or 0 amount
+
         df_disb_clean = df_disb_user.dropna(subset=['disbursement_date','amount'])
         df_disb_clean = df_disb_clean[df_disb_clean['amount']>0]
 
@@ -405,7 +410,7 @@ def main():
     st.write("---")
     # Scenario Analysis
     st.header("Scenario Analysis: 'Bhai, agar mujhe X mahine mein khatam karna hai toh EMI kitni honi chahiye?'")
-    target_months = st.number_input("Target: Loan should finish within how many months?", 
+    target_months = st.number_input("Target: Loan should finish within how many months?",
                                     min_value=1, max_value=600, value=60, step=1)
 
     if st.button("Find Required EMI"):
@@ -431,7 +436,8 @@ def main():
                 simple_years=simple_years,
                 target_months=target_months
             )
-            st.success(f"Bhai, agar tu {target_months} mahine mein poora karna chahta hai, to approx EMI ~ Rs. {required_emi:,.2f} chahiye!")
+            st.success(f"Bhai, agar tu {target_months} mahine mein poora karna chahta hai, to approx EMI ~ Rs. {required_emi:,.0f} chahiye!")
+
 
 if __name__ == "__main__":
     main()
